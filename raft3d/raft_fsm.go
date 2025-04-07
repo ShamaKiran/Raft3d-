@@ -2,87 +2,79 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
-	"log" // 👈 for log.Fatal
-	"sync"
 
 	"github.com/hashicorp/raft"
 )
 
-// PrintJob represents a print job stored in Raft logs
+// PrintJob represents a print job in the system
 type PrintJob struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 }
 
-// FSM implements the Raft state machine
+// FSM implements raft.FSM and manages PrintJobs
 type FSM struct {
-	mu   sync.Mutex
 	jobs map[string]PrintJob
 }
 
-// NewFSM returns an initialized FSM
 func NewFSM() *FSM {
-	return &FSM{
-		jobs: make(map[string]PrintJob),
-	}
+	return &FSM{jobs: make(map[string]PrintJob)}
 }
 
-// Apply applies a Raft log entry
-func (f *FSM) Apply(logEntry *raft.Log) interface{} {
+func (f *FSM) Apply(log *raft.Log) interface{} {
 	var job PrintJob
-	if err := json.Unmarshal(logEntry.Data, &job); err != nil {
-		log.Fatal("Failed to decode job:", err)
+	if err := json.Unmarshal(log.Data, &job); err != nil {
+		fmt.Println("Failed to unmarshal log:", err)
+		return nil
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
+
 	f.jobs[job.ID] = job
 	return nil
 }
 
-// Snapshot returns a snapshot of the current state
 func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// Create a deep copy to freeze state
-	jobsCopy := make(map[string]PrintJob)
-	for k, v := range f.jobs {
-		jobsCopy[k] = v
-	}
-	return &fsmSnapshot{jobs: jobsCopy}, nil
+	return &snapshot{jobs: f.jobs}, nil
 }
 
-// Restore restores the state from a snapshot
-func (f *FSM) Restore(reader io.ReadCloser) error {
-	defer reader.Close()
-	decoder := json.NewDecoder(reader)
-	var jobs map[string]PrintJob
-	if err := decoder.Decode(&jobs); err != nil {
-		return err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.jobs = jobs
-	return nil
+func (f *FSM) Restore(rc io.ReadCloser) error {
+	defer rc.Close()
+	return json.NewDecoder(rc).Decode(&f.jobs)
 }
 
-// fsmSnapshot implements raft.FSMSnapshot
-type fsmSnapshot struct {
+// Snapshot structure
+type snapshot struct {
 	jobs map[string]PrintJob
 }
 
-func (s *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
-	data, err := json.Marshal(s.jobs)
+func (s *snapshot) Persist(sink raft.SnapshotSink) error {
+	b, err := json.Marshal(s.jobs)
 	if err != nil {
 		sink.Cancel()
 		return err
 	}
-	if _, err := sink.Write(data); err != nil {
+
+	if _, err := sink.Write(b); err != nil {
 		sink.Cancel()
 		return err
 	}
+
 	return sink.Close()
 }
 
-func (s *fsmSnapshot) Release() {}
+func (s *snapshot) Release() {}
+
+// --- ✅ Globals and Setters moved here ---
+var (
+	raftNode *raft.Raft
+	fsmInst  *FSM
+)
+
+func SetFSMInstance(f *FSM) {
+	fsmInst = f
+}
+
+func SetRaftInstance(r *raft.Raft) {
+	raftNode = r
+}
