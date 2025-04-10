@@ -1,19 +1,17 @@
-# Binaries
+# VS Code
+.vscode/
+
+# Go binaries
 *.exe
 *.out
 *.o
 
-# VS Code
-.vscode/
+# Raft DB and logs
+*.db
+*.db.lock
+raft_data/
+raft_node_*/
 
-# Go cache/build artifacts
-*.test
-*.log
-
-# Raft logs and snapshots (if your app creates these)
+# Logs and snapshots
 logs/
 snapshot/
-
-# OS
-.DS_Store
-Thumbs.db
