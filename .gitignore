@@ -1,0 +1,19 @@
+# Binaries
+*.exe
+*.out
+*.o
+
+# VS Code
+.vscode/
+
+# Go cache/build artifacts
+*.test
+*.log
+
+# Raft logs and snapshots (if your app creates these)
+logs/
+snapshot/
+
+# OS
+.DS_Store
+Thumbs.db
