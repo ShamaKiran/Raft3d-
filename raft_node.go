@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -15,7 +14,10 @@ import (
 	raftboltdb "github.com/hashicorp/raft-boltdb"
 )
 
-var raftNode *raft.Raft
+var (
+	raftNode *raft.Raft
+	fsm      *FSM
+)
 
 func main() {
 	// CLI flags
@@ -24,6 +26,12 @@ func main() {
 	raftBind := flag.String("raft", "127.0.0.1:9000", "Raft bind address")
 	joinAddr := flag.String("join", "", "Address of leader to join (host:port)")
 	flag.Parse()
+
+	// Initialize FSM
+	fsm = &FSM{
+		jobs:     make(map[string]PrintJob),
+		printers: make(map[string]Printer),
+	}
 
 	// Raft config
 	config := raft.DefaultConfig()
@@ -52,8 +60,8 @@ func main() {
 	snapshots := raft.NewInmemSnapshotStore()
 	logStore := store
 
-	// FSM
-	raftNode, err = raft.NewRaft(config, &FSM{}, store, logStore, snapshots, transport)
+	// Create Raft node
+	raftNode, err = raft.NewRaft(config, fsm, store, logStore, snapshots, transport)
 	if err != nil {
 		log.Fatalf("Failed to create raft node: %v", err)
 	}
@@ -81,28 +89,53 @@ func main() {
 		log.Printf("Sent join request to leader at %s", *joinAddr)
 	}
 
-	// HTTP Handlers
+	// Register HTTP Handlers
 	http.HandleFunc("/join", handleJoin)
 	http.HandleFunc("/status", handleStatus)
+
+	// Job handlers
+	http.HandleFunc("/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			submitJobHandler(w, r)
+		} else if r.Method == http.MethodGet {
+			getJobsHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	http.HandleFunc("/jobs/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			getJobHandler(w, r)
+		} else if r.Method == http.MethodPut {
+			updateJobStatusHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Printer handlers
+	http.HandleFunc("/printers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			createPrinterHandler(w, r)
+		} else if r.Method == http.MethodGet {
+			getPrintersHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	http.HandleFunc("/printers/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			getPrinterHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 
 	log.Printf("HTTP server listening on %s", *httpAddr)
 	log.Fatal(http.ListenAndServe(*httpAddr, nil))
 }
-
-// FSM implementation
-type FSM struct{}
-
-func (f *FSM) Apply(*raft.Log) interface{}         { return nil }
-func (f *FSM) Snapshot() (raft.FSMSnapshot, error) { return &fsmSnapshot{}, nil }
-func (f *FSM) Restore(io.ReadCloser) error         { return nil }
-
-type fsmSnapshot struct{}
-
-func (f *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
-	sink.Cancel()
-	return nil
-}
-func (f *fsmSnapshot) Release() {}
 
 // /join handler
 func handleJoin(w http.ResponseWriter, r *http.Request) {
